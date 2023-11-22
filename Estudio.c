@@ -33,31 +33,33 @@ int piercing_artist_disponivel = 1;
 typedef struct {
     int id;
     const char *action;
-    time_t arrival_time;
-    time_t start_time;
-    time_t end_time;
+    struct timespec arrival_time;
+    struct timespec start_time;
+    struct timespec end_time;
 } Client;
 
 typedef struct {
-    time_t arrival_time;
-    time_t wait_time;
-    time_t end_time;
+    struct timespec arrival_time;
+    struct timespec wait_time;
+    struct timespec end_time;
 } TimeInfo;
 
 void log_professional(const char *professional, int id, const char *action) {
-    printf("%s #%d %s\n", professional, id, action);
+    printf("[%s] finalizou o atendimento do cliente %d\n", professional, id);
 }
 
 void log_client(const Client *client, const TimeInfo *time_info) {
-    printf("Cliente #%d %s %ld segundos\n", client->id, client->action, time_info->arrival_time);
+    printf("[GERADOR] Cliente %d de %s chegou e foi sentar em puff de espera %d. Tempo de atendimento: %ld segundos\n",
+           client->id, client->action, (rand() % 10) + 1, time_info->end_time.tv_sec - time_info->arrival_time.tv_sec);
 }
 
 void *tattoo_thread(void *arg);
 void *piercing_thread(void *arg);
+void *recepcao_thread(void *arg);
 
 void *recepcao_thread(void *arg) {
     while (num_clientes_servidos < max_clientes) {
-        usleep(100 * 60 * 1000);
+        usleep(100 * 1000); // 100ms
 
         if (num_clientes_servidos >= max_clientes) {
             break;
@@ -90,8 +92,9 @@ void *tattoo_thread(void *arg) {
     int id = rand() % 1000 + 1;
 
     pthread_mutex_lock(&mutex);
-    TimeInfo time_info = {.arrival_time = time(NULL), .wait_time = 0, .end_time = 0};
-    Client client = {id, "Chegou para fazer uma tatuagem. Tempo de espera: ", time_info.arrival_time, 0, 0};
+    TimeInfo time_info = {.arrival_time = {0, 0}, .wait_time = {0, 0}, .end_time = {0, 0}};
+    clock_gettime(CLOCK_REALTIME, &time_info.arrival_time);
+    Client client = {id, "tatuagem", time_info.arrival_time, {0, 0}, {0, 0}};
     log_client(&client, &time_info);
 
     if (!studio_aberto) {
@@ -110,11 +113,12 @@ void *tattoo_thread(void *arg) {
             piercing_artist_disponivel = 0; // O body piercer não está mais disponível
         }
 
-        client.start_time = time(NULL);
+        clock_gettime(CLOCK_REALTIME, &client.start_time);
 
         // Calculando o tempo de espera
-        time_info.wait_time = client.start_time - time_info.arrival_time;
-        client.action = "Iniciou o procedimento. Tempo de espera: ";
+        time_info.wait_time.tv_sec = client.start_time.tv_sec - time_info.arrival_time.tv_sec;
+        time_info.wait_time.tv_nsec = client.start_time.tv_nsec - time_info.arrival_time.tv_nsec;
+        client.action = "tatuagem";
         log_client(&client, &time_info);
 
         pthread_mutex_unlock(&mutex);
@@ -123,23 +127,24 @@ void *tattoo_thread(void *arg) {
         usleep(tempo_servico * 1000);
 
         pthread_mutex_lock(&mutex);
+        clock_gettime(CLOCK_REALTIME, &time_info.end_time);
+        client.end_time = time_info.end_time;
+
         if (tattoo_artist_disponivel) {
-            log_professional("Tatuador", id, "Iniciou a tatuagem.");
+            log_professional("TATUADOR", id, "Iniciou a tatuagem.");
             num_tattoo_clientes_servidos++;
-            log_professional("Tatuador", id, "Finalizou a tatuagem.");
+            log_professional("TATUADOR", id, "Finalizou a tatuagem.");
         } else {
-            log_professional("Body Piercer", id, "Iniciou o body piercing.");
+            log_professional("BODY PIERCING", id, "Iniciou o body piercing.");
             num_piercing_clientes_servidos++;
-            log_professional("Body Piercer", id, "Finalizou o body piercing.");
+            log_professional("BODY PIERCING", id, "Finalizou o body piercing.");
         }
 
-        time_info.end_time = time(NULL);
-        client.end_time = time_info.end_time;
-        client.action = "Terminou o procedimento. Tempo de serviço total: ";
+        client.action = "tatuagem";
         log_client(&client, &time_info);
         num_clientes_servidos++;
 
-        if (time_info.wait_time == 0) {
+        if (time_info.wait_time.tv_sec == 0 && time_info.wait_time.tv_nsec == 0) {
             num_clientes_atendidos_sem_espera++;
         }
 
@@ -156,7 +161,8 @@ void *tattoo_thread(void *arg) {
             pthread_mutex_lock(&mutex);
             num_tattoo_pufs--; // Cliente deixou o puff e vai embora
             num_clientes_esperando--;
-            client.action = "Chegou e sentou no puff enquanto espera. Tempo de espera nos pufs: ";
+            clock_gettime(CLOCK_REALTIME, &time_info.wait_time);
+            client.action = "tatuagem";
             log_client(&client, &time_info);
         } else {
             // Se não houver pufs disponíveis, o cliente vai embora
@@ -175,8 +181,9 @@ void *piercing_thread(void *arg) {
     int id = rand() % 1000 + 1;
 
     pthread_mutex_lock(&mutex);
-    TimeInfo time_info = {.arrival_time = time(NULL), .wait_time = 0, .end_time = 0};
-    Client client = {id, "Chegou para fazer um body piercing. Tempo de espera: ", time_info.arrival_time, 0, 0};
+    TimeInfo time_info = {.arrival_time = {0, 0}, .wait_time = {0, 0}, .end_time = {0, 0}};
+    clock_gettime(CLOCK_REALTIME, &time_info.arrival_time);
+    Client client = {id, "body piercing", time_info.arrival_time, {0, 0}, {0, 0}};
     log_client(&client, &time_info);
 
     if (!studio_aberto) {
@@ -190,11 +197,12 @@ void *piercing_thread(void *arg) {
     // Se o body piercer estiver disponível, atende o cliente imediatamente
     if (piercing_artist_disponivel) {
         piercing_artist_disponivel = 0; // O body piercer não está mais disponível
-        client.start_time = time(NULL);
+        clock_gettime(CLOCK_REALTIME, &client.start_time);
 
         // Calculando o tempo de espera real
-        time_info.wait_time = client.start_time - time_info.arrival_time;
-        client.action = "Iniciou o body piercing. Tempo de espera: ";
+        time_info.wait_time.tv_sec = client.start_time.tv_sec - time_info.arrival_time.tv_sec;
+        time_info.wait_time.tv_nsec = client.start_time.tv_nsec - time_info.arrival_time.tv_nsec;
+        client.action = "body piercing";
         log_client(&client, &time_info);
 
         pthread_mutex_unlock(&mutex);
@@ -203,14 +211,14 @@ void *piercing_thread(void *arg) {
         usleep(tempo_servico * 1000);
 
         pthread_mutex_lock(&mutex);
-        log_professional("Body Piercer", id, "Iniciou o body piercing.");
-        time_info.end_time = time(NULL);
+        log_professional("BODY PIERCING", id, "Iniciou o body piercing.");
+        clock_gettime(CLOCK_REALTIME, &time_info.end_time);
         client.end_time = time_info.end_time;
-        client.action = "Terminou o body piercing. Tempo de serviço total: ";
+        client.action = "body piercing";
         log_client(&client, &time_info);
         num_clientes_servidos++;
         num_piercing_clientes_servidos++;
-        log_professional("Body Piercer", id, "Finalizou o body piercing.");
+        log_professional("BODY PIERCING", id, "Finalizou o body piercing.");
         piercing_artist_disponivel = 1; // O body piercer está disponível novamente
         pthread_mutex_unlock(&mutex);
     } else {
@@ -223,7 +231,8 @@ void *piercing_thread(void *arg) {
             pthread_mutex_lock(&mutex);
             num_piercing_pufs--; // Cliente deixou o puff e vai embora
             num_clientes_esperando--;
-            client.action = "Chegou e sentou no puff enquanto espera. Tempo de espera nos pufs: ";
+            clock_gettime(CLOCK_REALTIME, &time_info.wait_time);
+            client.action = "body piercing";
             log_client(&client, &time_info);
         } else {
             // Se não houver pufs disponíveis, o cliente vai embora
@@ -243,6 +252,12 @@ int main(int argc, char *argv[]) {
         printf("Uso: %s CLI PT PBP PAT MINATEN MAXATEN\n", argv[0]);
         return 1;
     }
+
+    printf("Estúdio de tatuagem e body piercing Esperta\n");
+    printf("\n[MAIN] Quantidade de clientes %s\n", argv[1]);
+    printf("[MAIN] Percentual cliente tatuagem %s\n", argv[4]);
+    printf("[MAIN] Puffs para tatuagem %s     Puffs para piercing %s\n", argv[2], argv[3]);
+    printf("[MAIN] Minimo atendimento %s     Maximo atendimento %s\n", argv[5], argv[6]);
 
     max_clientes = atoi(argv[1]);
     num_tattoo_pufs = atoi(argv[2]);
@@ -275,12 +290,11 @@ int main(int argc, char *argv[]) {
         pthread_mutex_unlock(&mutex);
     }
 
-    printf("\nResumo do dia:\n");
-    printf("Total de clientes atendidos: %d\n", num_clientes_servidos);
-    printf("Clientes atendidos por tatuadores: %d\n", num_tattoo_clientes_servidos);
-    printf("Clientes atendidos por body piercers: %d\n", num_piercing_clientes_servidos);
-    printf("Clientes atendidos sem esperar nos pufs: %d\n", num_clientes_atendidos_sem_espera);
-    printf("Clientes que chegaram e foram embora sem serem atendidos: %d\n", num_clientes_esquerda);
+    printf("\n[MAIN] Clientes atendidos (TOTAL): %d\n", num_clientes_servidos);
+    printf("[MAIN] Clientes de tatuagem atendidos: %d\n", num_tattoo_clientes_servidos);
+    printf("[MAIN] Clientes de Piercing atendidos: %d\n", num_piercing_clientes_servidos);
+    printf("[MAIN] Clientes atendidos sem esperar: %d\n", num_clientes_atendidos_sem_espera);
+    printf("[MAIN] Clientes que foram embora, sem serem atendidos: %d\n", num_clientes_esquerda);
 
     pthread_mutex_destroy(&mutex);
     pthread_cond_destroy(&cond);
